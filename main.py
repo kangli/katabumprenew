@@ -50,10 +50,9 @@ def download_cf_autoclick():
     return None
 
 def save_debug_html(page, filename):
-    """保存页面 HTML 用于调试"""
+    """保存页面 HTML 用于调试 - 使用 DrissionPage 正确 API"""
     try:
-        html = page.get_html()
-        # 只保存关键部分，避免太大
+        html = page.html
         if len(html) > 50000:
             html = html[:20000] + "\n<!-- truncated -->\n" + html[-20000:]
         with open(filename, 'w', encoding='utf-8') as f:
@@ -63,7 +62,7 @@ def save_debug_html(page, filename):
         log(f"[调试] 保存 HTML 失败: {e}")
 
 def find_renew_buttons(page):
-    """寻找所有可能的续期按钮，返回按钮列表"""
+    """寻找所有可能的续期按钮"""
     buttons = []
     selectors = [
         'css:button[data-bs-target="#renew-modal"]',
@@ -76,8 +75,6 @@ def find_renew_buttons(page):
         'css:button[id*="renew"]',
         'css:button[class*="renew"]',
         'css:input[value*="renew"]',
-        'css:span:has-text("Renew")',
-        'css:div:has-text("Renew")',
     ]
     
     for sel in selectors:
@@ -95,6 +92,51 @@ def find_renew_buttons(page):
         log(f"  [{i}] selector={b['selector']}, text={b['text']}")
     
     return buttons
+
+def execute_js(page, js_code):
+    """执行 JavaScript 代码 - 使用正确的 API"""
+    try:
+        return page.run_js(js_code)
+    except Exception as e:
+        log(f"[JS] 执行失败: {e}")
+        return []
+
+def wait_for_login(page):
+    """等待登录成功，检查是否跳转到 dashboard"""
+    log("[登录] 等待登录完成...")
+    # 最多等待 30 秒
+    for i in range(30):
+        url = page.url
+        if 'login' not in url or 'dashboard' in url:
+            log(f"[登录] 已跳转到: {url}")
+            return True
+        time.sleep(1)
+    
+    log("[登录] 登录超时，当前 URL: " + page.url)
+    return False
+
+def check_if_logged_in(page):
+    """检查是否已登录"""
+    url = page.url
+    title = page.title
+    log(f"[登录] 检查登录状态 - URL: {url}, 标题: {title}")
+    
+    # 如果 URL 包含 dashboard 或者不包含 login，说明已登录
+    if 'dashboard' in url or (url != 'https://dashboard.katabump.com/auth/login' and 'login' not in url):
+        log("[登录] 已登录！")
+        return True
+    
+    # 检查页面内容是否包含登出或用户信息
+    try:
+        body_text = page.ele('css:body').text.lower() if hasattr(page.ele('css:body'), 'text') else ''
+        if 'logout' in body_text or 'dashboard' in body_text or 'sign out' in body_text:
+            log("[登录] 检测到登出/仪表板元素，已登录")
+            return True
+    except:
+        pass
+    
+    log("[登录] 未检测到登录成功")
+    return False
 
 # ==================== 截图上传与通知 ====================
 class Reporter:
@@ -117,7 +159,7 @@ class Reporter:
         log("[上传] 正在上传截图到 Telegra.ph...")
         try:
             valid_screenshots = [f for f in self.screenshots if os.path.exists(f)]
-            if not valid_screenshots: return "没有有效的截图文件可上传。"
+            if not valid_screensshots: return "没有有效的截图文件可上传。"
             files_to_upload = [('file', (os.path.basename(f), open(f, 'rb'), 'image/png')) for f in valid_screenshots]
             upload_resp = self.session.post('https://telegra.ph/upload', files=files_to_upload, timeout=45)
             if upload_resp.status_code != 200: return f"上传失败: {upload_resp.text}"
@@ -165,15 +207,15 @@ def analyze_page_alert(page):
     """分析页面，返回状态"""
     log("[系统] 检查页面状态...")
     
-    # 检查 URL 是否包含错误信息
     url = page.url
-    log(f"[系统] 当前 URL: {url}")
-    
-    # 检查页面标题
     title = page.title
-    log(f"[系统] 页面标题: {title}")
+    log(f"[系统] URL: {url}")
+    log(f"[系统] 标题: {title}")
     
-    # 尝试多种 alert 选择器
+    # 检查是否已经跳转到 dashboard（说明登录成功）
+    if 'dashboard.katabump.com' in url and 'servers' in url:
+        log("[系统] 已到达服务器管理页面")
+    
     alert_selectors = [
         'css:.alert.alert-danger',
         'css:.alert-danger',
@@ -200,7 +242,6 @@ def analyze_page_alert(page):
         except:
             pass
     
-    # 检查是否有成功消息
     for sel in alert_selectors:
         try:
             alert = page.ele(sel, timeout=2)
@@ -229,10 +270,9 @@ def analyze_page_alert(page):
 def find_renew_button_js(page):
     """使用 JS 寻找续期按钮"""
     try:
-        buttons = page.eval('''
+        buttons = page.run_js('''
             () => {
                 const results = [];
-                // 方法1: 查找包含 Renew 的按钮
                 const allButtons = document.querySelectorAll('button, a, span, div');
                 allButtons.forEach(btn => {
                     const text = btn.textContent || btn.innerText || '';
@@ -311,9 +351,15 @@ def job():
             page.ele('css:input[name="password"]').input(password)
             log("[登录] 点击提交...")
             page.ele('css:button#submit').click()
-            log("[登录] 等待跳转...")
-            page.wait.url_change('login', exclude=True, timeout=20)
-            log("[登录] 登录成功！")
+            
+            # 等待登录完成
+            if wait_for_login(page):
+                check_if_logged_in(page)
+            else:
+                log("[登录] 登录未成功，保存调试信息...")
+                save_debug_html(page, "debug_login_failed.html")
+                reporter.add_screenshot(page, "01_login_failed")
+                raise Exception("登录失败")
         else:
             log("[登录] 未找到登录表单，当前页面:")
             save_debug_html(page, "debug_login_form.html")
@@ -374,9 +420,9 @@ def job():
                 elif 'index' in btn_info:
                     # JS 查找的按钮
                     try:
-                        target = page.eval(f"() => document.querySelectorAll('button, a, span, div')[{btn_info['index']}]")
+                        target = page.run_js(f"() => document.querySelectorAll('button, a, span, div')[{btn_info['index']}]")
                         if target:
-                            page.execute(f'target.click();', target)
+                            page.run_js('target.click();')
                     except Exception as e:
                         log(f"[按钮] JS 点击失败: {e}")
                         continue
@@ -395,10 +441,9 @@ def job():
                     reporter.add_screenshot(page, f"03_attempt_{attempt}_modal_opened")
                     
                     # 黑盒等待
-                    log("[操作] Popup appeared, entering black-box wait mode...")
-                    log("[黑盒等待] Giving plugins 20 seconds of independent work time...")
+                    log("[操作] 弹窗出现，等待 20 秒...")
                     time.sleep(20)
-                    log("[黑盒等待] Wait end")
+                    log("[黑盒等待] 等待结束")
                     reporter.add_screenshot(page, f"04_attempt_{attempt}_after_wait")
                     
                     # 寻找 Renew 按钮
