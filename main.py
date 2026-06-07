@@ -69,7 +69,7 @@ def find_renew_buttons(page):
         'css:button[data-target="#renew-modal"]',
         'css:button:has-text("Renew")',
         'css:button:has-text("续费")',
-        'css:button.btn-primary:has-text("Renew")',
+        'css:button.btn-outline-primary:has-text("Renew")',
         'css:a:has-text("Renew")',
         'css:.btn:has-text("Renew")',
         'css:button[id*="renew"]',
@@ -113,22 +113,59 @@ def check_if_logged_in(page):
     title = page.title
     log(f"[登录] 检查登录状态 - URL: {url}, 标题: {title}")
     
-    # 如果 URL 包含 dashboard 或者不包含 login，说明已登录
-    if 'dashboard' in url or (url != 'https://dashboard.katabump.com/auth/login' and 'login' not in url):
+    # 关键修复: /auth/login 说明还在登录页面，不算登录成功
+    if '/auth/login' in url:
+        log("[登录] 仍在登录页面，登录失败")
+        return False
+    
+    # 如果 URL 包含 servers 或者不包含 auth/login，说明已登录
+    if 'servers' in url or ('/' in url.split('://')[-1].split('/')[1] and '/auth/' not in url):
         log("[登录] 已登录！")
         return True
     
     # 检查页面内容是否包含登出或用户信息
     try:
         body_text = page.ele('css:body').text.lower() if hasattr(page.ele('css:body'), 'text') else ''
-        if 'logout' in body_text or 'dashboard' in body_text or 'sign out' in body_text:
-            log("[登录] 检测到登出/仪表板元素，已登录")
+        if 'logout' in body_text or 'servers' in body_text:
+            log("[登录] 检测到登出/服务器元素，已登录")
             return True
-    except:
-        pass
+        # 检查页面标题
+        if 'Log in' in title or 'login' in title.lower():
+            log("[登录] 页面标题显示仍在登录页")
+            return False
+    except Exception as e:
+        log(f"[登录] 检查页面内容失败: {e}")
     
     log("[登录] 未检测到登录成功")
     return False
+
+def ensure_session_stable(page):
+    """确保会话稳定 - 等待 Cookie 持久化，处理 Cloudflare 盾的会话重置"""
+    log("[登录] 等待会话稳定...")
+    # 等待 3 秒确保 Cookie 持久化
+    for i in range(3):
+        time.sleep(1)
+        cookies = page.cookies() if hasattr(page, 'cookies') else []
+        has_auth_cookie = any('session' in c or 'csrftoken' in c or 'sessionid' in c for c in cookies) if cookies else False
+        if has_auth_cookie:
+            log(f"[登录] 检测到认证 Cookie，会话稳定")
+            return True
+    
+    # 如果没有检测到 Cookie，尝试刷新页面
+    log("[登录] 未检测到认证 Cookie，刷新页面...")
+    try:
+        page.refresh()
+        time.sleep(3)
+        cookies = page.cookies() if hasattr(page, 'cookies') else []
+        has_auth_cookie = any('session' in c or 'csrftoken' in c or 'sessionid' in c for c in cookies) if cookies else False
+        if has_auth_cookie:
+            log("[登录] 刷新后检测到认证 Cookie")
+            return True
+    except Exception as e:
+        log(f"[登录] 刷新失败: {e}")
+    
+    log("[登录] 警告：未检测到认证 Cookie，但继续尝试")
+    return True  # 继续尝试
 
 # ==================== 截图上传与通知 ====================
 class Reporter:
