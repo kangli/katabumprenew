@@ -93,14 +93,6 @@ def find_renew_buttons(page):
     
     return buttons
 
-def execute_js(page, js_code):
-    """执行 JavaScript 代码 - 使用正确的 API"""
-    try:
-        return page.run_js(js_code)
-    except Exception as e:
-        log(f"[JS] 执行失败: {e}")
-        return []
-
 def wait_for_login(page):
     """等待登录成功，检查是否跳转到 dashboard"""
     log("[登录] 等待登录完成...")
@@ -159,7 +151,7 @@ class Reporter:
         log("[上传] 正在上传截图到 Telegra.ph...")
         try:
             valid_screenshots = [f for f in self.screenshots if os.path.exists(f)]
-            if not valid_screensshots: return "没有有效的截图文件可上传。"
+            if not valid_screenshots: return "没有有效的截图文件可上传。"
             files_to_upload = [('file', (os.path.basename(f), open(f, 'rb'), 'image/png')) for f in valid_screenshots]
             upload_resp = self.session.post('https://telegra.ph/upload', files=files_to_upload, timeout=45)
             if upload_resp.status_code != 200: return f"上传失败: {upload_resp.text}"
