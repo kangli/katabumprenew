@@ -1,1 +1,37 @@
+name: Katabump Auto Renew
 
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 */4 * *'
+
+env:
+  KB_EMAIL: ${{ secrets.KB_EMAIL }}
+  KB_PASSWORD: ${{ secrets.KB_PASSWORD }}
+  KB_RENEW_URL: ${{ secrets.KB_RENEW_URL }}
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run renew script
+        run: python main.py
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: '*.png'
