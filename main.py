@@ -1,8 +1,7 @@
 import os
 import time
-import json
 import datetime
-import requests
+import cloudscraper
 from bs4 import BeautifulSoup
 
 # ==================== 基础工具 ====================
@@ -10,56 +9,16 @@ def log(message):
     current_time = datetime.datetime.now().strftime("%H:%M:%S")
     print(f"[{current_time}] {message}", flush=True)
 
-# ==================== Cookie 管理 ====================
-def parse_cookie_string(cookie_str):
-    """解析 cookie 字符串为 requests.Session 可用的格式
-    支持格式: "key1=value1; key2=value2"
-    """
-    session = requests.Session()
-    if not cookie_str:
-        raise Exception("KB_COOKIE 环境变量未设置")
-    
-    cookies = {}
-    for pair in cookie_str.split(';'):
-        pair = pair.strip()
-        if '=' in pair:
-            key, value = pair.split('=', 1)
-            cookies[key.strip()] = value.strip()
-    
-    if cookies:
-        for key, value in cookies.items():
-            session.cookies.set(key, value, domain='dashboard.katabump.com')
-        log(f"[Cookie] 加载成功，{len(cookies)} 个 cookie: {list(cookies.keys())}")
-        return session
-    
-    raise Exception("无法解析 KB_COOKIE")
-
-def verify_cookie(session):
-    """验证 Cookie 是否有效"""
-    try:
-        resp = session.get('https://dashboard.katabump.com/servers', timeout=15)
-        if resp.status_code == 401 or resp.status_code == 403:
-            log("[验证] Cookie 已过期或无效")
-            return False
-        if 'login' in resp.url.lower() or 'auth/login' in resp.url:
-            log("[验证] Cookie 已失效，重定向到登录页")
-            return False
-        log("[验证] Cookie 验证成功")
-        return True
-    except Exception as e:
-        log(f"[验证] Cookie 验证失败: {e}")
-        return False
-
 # ==================== 续期核心逻辑 ====================
-def renew_server(session, target_url):
+def renew_server(scraper, target_url):
     """
-    通过 Cookie 访问续期页面并点击续期按钮
+    通过 Cloudscraper 访问续期页面并点击续期按钮
     返回 (success: bool, message: str)
     """
     log(f"[续期] 访问页面: {target_url}")
     
     try:
-        resp = session.get(target_url, timeout=15, allow_redirects=True)
+        resp = scraper.get(target_url, timeout=15, allow_redirects=True)
         if resp.status_code != 200:
             return False, f"HTTP {resp.status_code}"
         
@@ -115,7 +74,7 @@ def renew_server(session, target_url):
             if method == 'POST' and action:
                 log("[续期] 提交续期表单...")
                 post_url = action if action.startswith('http') else f"{target_url.rsplit('/', 1)[0]}/{action}"
-                post_resp = session.post(post_url, data=form_data, timeout=15, allow_redirects=True)
+                post_resp = scraper.post(post_url, data=form_data, timeout=15, allow_redirects=True)
                 
                 if post_resp.status_code == 200:
                     post_text = post_resp.text.lower()
@@ -136,7 +95,7 @@ def renew_server(session, target_url):
             if data_url:
                 log(f"[续期] 找到 data-url: {data_url}")
                 method = data_method.upper() if data_method else 'POST'
-                api_resp = session.post(data_url, timeout=15, allow_redirects=True)
+                api_resp = scraper.post(data_url, timeout=15, allow_redirects=True)
                 if api_resp.status_code == 200:
                     return True, "续期成功"
                 else:
@@ -153,24 +112,20 @@ def job():
     success = False
     
     try:
-        cookie_str = os.environ.get("KB_COOKIE")
         target_url = os.environ.get("KB_RENEW_URL")
         
-        if not cookie_str or not target_url:
-            raise Exception("KB_COOKIE 或 KB_RENEW_URL 环境变量未设置")
+        if not target_url:
+            raise Exception("KB_RENEW_URL 环境变量未设置")
         
         log(f"[配置] target_url={target_url}")
         
-        # 解析 Cookie
-        session = parse_cookie_string(cookie_str)
-        
-        # 验证 Cookie
-        if not verify_cookie(session):
-            raise Exception("Cookie 验证失败，请重新获取")
+        # 创建 Cloudscraper 实例
+        scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'linux', 'desktop': True})
+        log("[初始化] Cloudscraper 已初始化")
         
         # 执行续期
         log("[Step 1] 开始续期...")
-        success, message = renew_server(session, target_url)
+        success, message = renew_server(scraper, target_url)
         final_status_message = message
         
         log(f"[结果] {message}")
