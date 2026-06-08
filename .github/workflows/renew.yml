@@ -6,7 +6,8 @@ on:
     - cron: '0 2 */4 * *'
 
 env:
-  KB_COOKIE: ${{ secrets.KB_COOKIE }}
+  KB_EMAIL: ${{ secrets.KB_EMAIL }}
+  KB_PASSWORD: ${{ secrets.KB_PASSWORD }}
   KB_RENEW_URL: ${{ secrets.KB_RENEW_URL }}
 
 jobs:
