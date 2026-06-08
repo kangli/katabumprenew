@@ -1,5 +1,4 @@
 import os
-import time
 import datetime
 import cloudscraper
 from bs4 import BeautifulSoup
@@ -13,66 +12,51 @@ def renew_server(email, password):
         log("[错误] KB_RENEW_URL 未设置")
         return False
     
-    log(f"[访问] {target_url}")
+    log(f"[目标] {target_url}")
     scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'linux', 'desktop': True})
+    scraper.verify = False
     
-    # Step 1: 登录
+    # Step 1: 访问登录页，获取 CSRF token
     login_url = "https://dashboard.katabump.com/auth/login"
-    log(f"[登录] 访问 {login_url}")
-    resp = scraper.get(login_url, timeout=15, allow_redirects=True)
-    
+    log("[登录] 访问登录页...")
+    resp = scraper.get(login_url, timeout=15)
     if resp.status_code != 200:
         log(f"[错误] 登录页 HTTP {resp.status_code}")
         return False
     
-    if 'login' not in resp.url.lower():
-        log("[登录] 已登录状态")
+    soup = BeautifulSoup(resp.text, 'html.parser')
+    csrf_input = soup.find('input', {'name': '_csrf_token'}) or soup.find('input', {'name': 'csrf_token'}) or soup.find('input', {'name': '_csrf'})
+    if csrf_input and csrf_input.get('value'):
+        login_data = {
+            'email': email,
+            'password': password,
+            csrf_input['name']: csrf_input['value']
+        }
+        log("[登录] 发现 CSRF token")
     else:
-        log(f"[登录] 需要登录，提交 credentials...")
-        # 找登录表单
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        form = soup.find('form', id='login-form') or soup.find('form')
-        if not form:
-            log("[错误] 未找到登录表单")
-            return False
-        
-        # 提取 CSRF token
-        csrf = soup.find('input', {'name': 'csrf_token'}) or soup.find('input', {'name': '_csrf'}) or soup.find('input', {'name': '_token'})
-        if csrf and csrf.get('value'):
-            login_data = {
-                'email': email,
-                'password': password,
-                csrf.get('name'): csrf.get('value')
-            }
-        else:
-            login_data = {
-                'email': email,
-                'password': password
-            }
-        
-        # 找 form action
-        action = form.get('action', '')
-        if action and not action.startswith('http'):
-            action_url = f"{login_url.rsplit('/', 1)[0]}/{action}"
-        else:
-            action_url = login_url
-        
-        log(f"[登录] POST {action_url}")
-        resp = scraper.post(action_url, data=login_data, timeout=15, allow_redirects=True)
-        
-        if resp.status_code != 200:
-            log(f"[错误] 登录失败 HTTP {resp.status_code}")
-            return False
+        login_data = {'email': email, 'password': password}
     
-    # Step 2: 访问续期页面
+    # Step 2: 提交登录
+    log(f"[登录] POST {login_url}...")
+    resp = scraper.post(login_url, data=login_data, timeout=15, allow_redirects=True)
+    
+    log(f"[登录] 跳转: {resp.url}")
+    if 'login' in resp.url.lower():
+        log("[错误] 登录失败，仍停留在登录页")
+        log(f"[调试] 状态码: {resp.status_code}, 标题: {BeautifulSoup(resp.text, 'html.parser').title.string if BeautifulSoup(resp.text, 'html.parser').title else 'None'}")
+        return False
+    
+    log("[登录] 成功")
+    
+    # Step 3: 访问续期页面
     log(f"[续期] 访问 {target_url}")
-    resp = scraper.get(target_url, timeout=15, allow_redirects=True)
+    resp = scraper.get(target_url, timeout=15)
     if resp.status_code != 200:
         log(f"[错误] 续期页 HTTP {resp.status_code}")
         return False
     
     if 'login' in resp.url.lower():
-        log("[错误] 未登录或 Cookie 失效")
+        log("[错误] Cookie 已失效")
         return False
     
     soup = BeautifulSoup(resp.text, 'html.parser')
@@ -102,22 +86,21 @@ def renew_server(email, password):
     
     # 尝试表单提交
     form = soup.find('form')
-    if form:
-        action = form.get('action', '')
-        if action:
-            post_url = action if action.startswith('http') else f"{target_url.rsplit('/', 1)[0]}/{action}"
-            log(f"[续期] POST {post_url}")
-            post_resp = scraper.post(post_url, data={}, timeout=15, allow_redirects=True)
-            if post_resp.status_code == 200:
-                log("[成功] 续期请求已发送")
-                return True
+    if form and form.get('action'):
+        action = form['action']
+        post_url = action if action.startswith('http') else f"{target_url.rsplit('/', 1)[0]}/{action}"
+        log(f"[续期] POST {post_url}")
+        resp = scraper.post(post_url, data={}, timeout=15, allow_redirects=True)
+        if resp.status_code == 200:
+            log("[成功] 续期请求已发送")
+            return True
     
     # 尝试 data-url
     data_url = btn.get('data-url', '')
     if data_url:
         log(f"[续期] POST {data_url}")
-        post_resp = scraper.post(data_url, timeout=15, allow_redirects=True)
-        if post_resp.status_code == 200:
+        resp = scraper.post(data_url, timeout=15, allow_redirects=True)
+        if resp.status_code == 200:
             log("[成功] 续期请求已发送")
             return True
     
@@ -128,8 +111,7 @@ if __name__ == "__main__":
     email = os.environ.get("KB_EMAIL")
     password = os.environ.get("KB_PASSWORD")
     if not email or not password:
-        log("[错误] 需要设置 KB_EMAIL 和 KB_PASSWORD")
+        log("[错误] 需要 KB_EMAIL 和 KB_PASSWORD")
         exit(1)
-    
     success = renew_server(email, password)
     exit(0 if success else 1)
